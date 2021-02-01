@@ -1,99 +1,56 @@
 import os
-import json
-import argparse
+import tensorflow as tf
+from tensorflow.core.protobuf import saver_pb2
+import driving_data
+import model
 
-import numpy as np
+LOGDIR = './save'
 
-from model import build_model, save_weights
+sess = tf.InteractiveSession()
 
+L2NormConst = 0.001
 
-DATA_DIR = './data'
-LOG_DIR = './logs'
+train_vars = tf.trainable_variables()
 
-BATCH_SIZE = 16
-SEQ_LENGTH = 64
+loss = tf.reduce_mean(tf.square(tf.subtract(model.y_, model.y))) + tf.add_n([tf.nn.l2_loss(v) for v in train_vars]) * L2NormConst
+train_step = tf.train.AdamOptimizer(1e-4).minimize(loss)
+sess.run(tf.initialize_all_variables())
 
-class TrainLogger(object):
-    def __init__(self, file):
-        self.file = os.path.join(LOG_DIR, file)
-        self.epochs = 0
-        with open(self.file, 'w') as f:
-            f.write('epoch,loss,acc\n')
+# create a summary to monitor cost tensor
+tf.summary.scalar("loss", loss)
+# merge all summaries into a single op
+merged_summary_op =  tf.summary.merge_all()
 
-    def add_entry(self, loss, acc):
-        self.epochs += 1
-        s = '{},{},{}\n'.format(self.epochs, loss, acc)
-        with open(self.file, 'a') as f:
-            f.write(s)
+saver = tf.train.Saver(write_version = saver_pb2.SaverDef.V1)
 
-def read_batches(T, vocab_size):
-    length = T.shape[0]; #129,665
-    batch_chars = int(length / BATCH_SIZE); # 8,104
+# op to write logs to Tensorboard
+logs_path = './logs'
+summary_writer = tf.summary.FileWriter(logs_path, graph=tf.get_default_graph())
 
-    for start in range(0, batch_chars - SEQ_LENGTH, SEQ_LENGTH): # (0, 8040, 64)
-        X = np.zeros((BATCH_SIZE, SEQ_LENGTH)) # 16X64
-        Y = np.zeros((BATCH_SIZE, SEQ_LENGTH, vocab_size)) # 16X64X86
-        for batch_idx in range(0, BATCH_SIZE): # (0,16)
-            for i in range(0, SEQ_LENGTH): #(0,64)
-                X[batch_idx, i] = T[batch_chars * batch_idx + start + i] # 
-                Y[batch_idx, i, T[batch_chars * batch_idx + start + i + 1]] = 1
-        yield X, Y
+epochs = 30
+batch_size = 100
 
-def train(text, epochs=100, save_freq=10):
+# train over the dataset about 30 times
+for epoch in range(epochs):
+  for i in range(int(driving_data.num_images/batch_size)):
+    xs, ys = driving_data.LoadTrainBatch(batch_size)
+    train_step.run(feed_dict={model.x: xs, model.y_: ys, model.keep_prob: 0.8})
+    if i % 10 == 0:
+      xs, ys = driving_data.LoadValBatch(batch_size)
+      loss_value = loss.eval(feed_dict={model.x:xs, model.y_: ys, model.keep_prob: 1.0})
+      print("Epoch: %d, Step: %d, Loss: %g" % (epoch, epoch * batch_size + i, loss_value))
 
-    # character to index and vice-versa mappings
-    char_to_idx = { ch: i for (i, ch) in enumerate(sorted(list(set(text)))) }
-    print("Number of unique characters: " + str(len(char_to_idx))) #86
+    # write logs at every iteration
+    summary = merged_summary_op.eval(feed_dict={model.x:xs, model.y_: ys, model.keep_prob: 1.0})
+    summary_writer.add_summary(summary, epoch * driving_data.num_images/batch_size + i)
 
-    with open(os.path.join(DATA_DIR, 'char_to_idx.json'), 'w') as f:
-        json.dump(char_to_idx, f)
+    if i % batch_size == 0:
+      if not os.path.exists(LOGDIR):
+        os.makedirs(LOGDIR)
+      checkpoint_path = os.path.join(LOGDIR, "model.ckpt")
+      filename = saver.save(sess, checkpoint_path)
+  print("Model saved in file: %s" % filename)
 
-    idx_to_char = { i: ch for (ch, i) in char_to_idx.items() }
-    vocab_size = len(char_to_idx)
-
-    #model_architecture
-    model = build_model(BATCH_SIZE, SEQ_LENGTH, vocab_size)
-    model.summary()
-    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-
-
-    #Train data generation
-    T = np.asarray([char_to_idx[c] for c in text], dtype=np.int32) #convert complete text into numerical indices
-
-    print("Length of text:" + str(T.size)) #129,665
-
-    steps_per_epoch = (len(text) / BATCH_SIZE - 1) / SEQ_LENGTH  
-
-    log = TrainLogger('training_log.csv')
-
-    for epoch in range(epochs):
-        print('\nEpoch {}/{}'.format(epoch + 1, epochs))
-        
-        losses, accs = [], []
-
-        for i, (X, Y) in enumerate(read_batches(T, vocab_size)):
-            
-            print(X);
-
-            loss, acc = model.train_on_batch(X, Y)
-            print('Batch {}: loss = {}, acc = {}'.format(i + 1, loss, acc))
-            losses.append(loss)
-            accs.append(acc)
-
-        log.add_entry(np.average(losses), np.average(accs))
-
-        if (epoch + 1) % save_freq == 0:
-            save_weights(epoch + 1, model)
-            print('Saved checkpoint to', 'weights.{}.h5'.format(epoch + 1))
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train the model on some text.')
-    parser.add_argument('--input', default='input.txt', help='name of the text file to train from')
-    parser.add_argument('--epochs', type=int, default=100, help='number of epochs to train for')
-    parser.add_argument('--freq', type=int, default=10, help='checkpoint save frequency')
-    args = parser.parse_args()
-
-    if not os.path.exists(LOG_DIR):
-        os.makedirs(LOG_DIR)
-
-    train(open(os.path.join(DATA_DIR, args.input)).read(), args.epochs, args.freq)
+print("Run the command line:\n" \
+          "--> tensorboard --logdir=./logs " \
+          "\nThen open http://0.0.0.0:6006/ into your web browser")

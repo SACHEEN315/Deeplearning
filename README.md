@@ -1,23 +1,13 @@
-# char-rnn-keras
+# Autopilot-TensorFlow
+A TensorFlow implementation of this [Nvidia paper](https://arxiv.org/pdf/1604.07316.pdf) with some changes.
 
-Multi-layer recurrent neural networks for training and sampling from texts, inspired by [karpathy/char-rnn](https://github.com/karpathy/char-rnn).
+# How to Use
+Download the [dataset](https://drive.google.com/file/d/0B-KJCaaF7elleG1RbzVPZWV4Tlk/view?usp=sharing) and extract into the repository folder
 
-### Requirements
+Use `python train.py` to train the model
 
-This code is written in Python 2, and it requires the [Keras](https://keras.io) deep learning library.
+Use `python run.py` to run the model on a live webcam feed
 
-### Usage
+Use `python run_dataset.py` to run the model on the dataset
 
-All input data should be placed in the `data/` directory. The example `input.txt` is taken from the [Nottingham Dataset (Cleaned)](https://github.com/jukedeck/nottingham-dataset).
-
-To train the model with default settings:
-```bash
-$ python train.py
-```
-
-To sample the model:
-```bash
-$ python sample.py 100
-```
-
-Training loss/accuracy is stored in `logs/training_log.csv`.
+To visualize training using Tensorboard use `tensorboard --logdir=./logs`, then open http://0.0.0.0:6006/ into your web browser.
